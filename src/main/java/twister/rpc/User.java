@@ -11,7 +11,7 @@ public class User implements Comparable<User> {
 		this.name = id;
 	}
 
-	private final String id;
+	public final String id;
 	private int earliestPostId = -1;
 	private int latestPostId = -1;
 	private int latestPostIdOnServer = -1;
@@ -115,20 +115,19 @@ public class User implements Comparable<User> {
 
 	@Override
 	public boolean equals(Object obj) {
-		if (this == obj)
-			return true;
-		if (obj == null)
-			return false;
-		if (getClass() != obj.getClass())
-			return false;
-		User other = (User) obj;
-		if (id == null) {
-			if (other.id != null)
-				return false;
-		} else if (!id.equals(other.id))
-			return false;
-		return true;
+            if (this == obj)
+                    return true;
+            if (obj instanceof User) {
+                return id.equals(((User)obj).id);
+            }
+            return false;
 	}
+
+        @Override
+        public int hashCode() {
+            return id.hashCode();
+        }
+        
 
 	@Override
 	public int compareTo(User another) {
