@@ -23,6 +23,6 @@ package twister.rpc;
 public class Demo {
     
     public static void main(String[] args) {
-        new Twister("userKey", "http://localhost:28332/");
+        new Twister("sseehh", "http://localhost:28332/", "sseehh", "1ssss1");
     }
 }
