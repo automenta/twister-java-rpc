@@ -2,38 +2,30 @@ package twister.rpc;
 
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Base64;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.TreeMap;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import org.apache.http.HttpResponse;
 import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.ResponseHandler;
 import org.apache.http.client.methods.HttpPost;
-import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.BasicResponseHandler;
 import org.apache.http.impl.client.CloseableHttpClient;
-import org.apache.http.impl.client.HttpClients;
-import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
 import org.apache.http.util.EntityUtils;
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
-public class Twister {
+/** Read-only functions for accessing Twister through one user's wallet */
+public class TwisterReading extends TwisterPeer {
 
-    public final String url;
     private WalletUser wallet;
     private TreeMap<Post, Post> spamPostsList = new TreeMap<Post, Post>();
-    private TreeMap<String, WalletUser> walletUsersList = new TreeMap<String, WalletUser>();
 
     private TreeMap<String, User> followingUsers = new TreeMap<String, User>();
     private TreeMap<Post, Post> followingPosts = new TreeMap<Post, Post>();
@@ -48,73 +40,30 @@ public class Twister {
     private List<PostsListListener> postsListListeners = new ArrayList<PostsListListener>();
     private List<DirectMessagesListListener> directMessagesListListeners = new ArrayList<DirectMessagesListListener>();
 
-    private ExecutorService threads = Executors.newFixedThreadPool(THREADS);
-    
-    private static final int THREADS = 10;
-    private static final int MAX_HTTP_CONNECTION = 20;
-    private static final int DEFAULT_GET_POSTS = 50;
-    
-    private ScheduledExecutorService pollingThread = Executors.newScheduledThreadPool(1);
-           
-    PoolingHttpClientConnectionManager conman = new PoolingHttpClientConnectionManager();
-    private final String auth;
-
-    public CloseableHttpClient newClient() {
-        //return HttpClients.custom().setConnectionManager(conman).build();
-        return HttpClients.createDefault();
-    }
- 
-   
-    public HttpPost newPost() {
-        HttpPost p = new HttpPost(url);
-        p.setHeader("Authorization", "Basic " + auth);
-        return p;
-    }
-    
-    public HttpPost newPost(JSONObject entity) {
-        HttpPost p = newPost();
-        p.setEntity(new StringEntity(entity.toString(), "utf-8"));
-        return p;
-    }
-    public HttpPost newPost(String method, int id, Object params) {
-        HttpPost p = newPost();
-        JSONObject x = new JSONObject()
-                .put("method", method)
-                .put("id", id)                
-                .put("jsonrpc", "2.0");
-        if (params!=null)
-            x.put("params", params);
-        p.setEntity(new StringEntity(x.toString(), "utf-8"));
-        return p;
-    }
 
     
     
-    public Twister(String userid, String serverURL, String serverUser, String serverPass) {
-        conman.setMaxTotal(MAX_HTTP_CONNECTION);
-        
-        
-        this.auth = Base64.getEncoder().encodeToString((serverUser + ':' + serverPass).getBytes());
-        
+    public TwisterReading(String userid, String serverURL, String serverUser, String serverPass) {
+        super(serverURL, serverUser, serverPass);
                 
         wallet = new WalletUser(userid);
-        this.url = serverURL;
-
-        pollingThread.scheduleAtFixedRate(new Runnable() {
-            @Override public void run() {
-                threads.execute(new GetWalletUsersTask() {
-                    @Override public void result(List<String> users) {
-                        System.out.println("Wallet users: " + users);
-                    }                    
-                });
-            }
-        }, 0, 30, TimeUnit.SECONDS);
+        
+//
+//        pollingThread.scheduleAtFixedRate(new Runnable() {
+//            @Override public void run() {
+//                threads.execute(new GetWalletUsersTask() {
+//                    @Override public void result(List<String> users) {
+//                        System.out.println("Wallet users: " + users);
+//                    }                    
+//                });
+//            }
+//        }, 0, 30, TimeUnit.SECONDS);
         
 
         pollingThread.scheduleAtFixedRate(new Runnable() {
             @Override
             public void run() {
-                threads.execute(new GetLastHaveTask(user()));
+                threads.execute(new GetLastHaveTask(user(), DEFAULT_GET_POSTS));
             }
         }, 0, 30, TimeUnit.SECONDS);
 
@@ -159,10 +108,6 @@ public class Twister {
 //        setCurrentWalletUser(getWalletUsersList().get(walletUser));
 //    }
 
-    public TreeMap<String, WalletUser> getWalletUsersList() {
-        return walletUsersList;
-    }
-
     public TreeMap<String, User> getCurrentWalletUserFollowingUsersList() {
         return followingUsers;
     }
@@ -183,31 +128,6 @@ public class Twister {
         return followingPosts;
     }
 
-    public void follow(String user) {
-        (new FollowTask()).executeOnExecutor(threads, user()
-                .getId(), user);
-    }
-
-    public void sendNewTwist(String msg) {
-        User walletUserProfile = getProfileOrCreateIfNotExist(user()
-                .getId());
-        (new SendNewTwistTask()).executeOnExecutor(threads,
-                user().getId(),
-                "" + (walletUserProfile.getLatestPostIdOnServer() + 1), msg);
-    }
-
-    public void sendNewDirectMessage(String toUserId, String msg) {
-        User walletUserProfile = getProfileOrCreateIfNotExist(user()
-                .getId());
-
-        (new SendNewDirectMessageTask())
-                .executeOnExecutor(threads,
-                        user().getId(),
-                        ""
-                        + (walletUserProfile
-                        .getLatestDirectMessageId(toUserId) + 1),
-                        toUserId, msg);
-    }
 
     public void addFollowingUsersListListener(FollowingUsersListListener f) {
         followingUsersListListeners.add(f);
@@ -307,8 +227,8 @@ public class Twister {
 
                         threads.execute(new GetAvatarTask(id));
 
-                        Twister.this.notifyFollowingUsersListListener();
-                        Twister.this.notifyPostsListListener();
+                        TwisterReading.this.notifyFollowingUsersListListener();
+                        TwisterReading.this.notifyPostsListListener();
                     }
                 }
             } catch (ClientProtocolException e) {
@@ -370,10 +290,12 @@ public class Twister {
 
     private class GetLastHaveTask implements Runnable {
         private final WalletUser u;
+        private final int numPosts;
 
-        public GetLastHaveTask(WalletUser requestForWalletUser) {
+        public GetLastHaveTask(WalletUser requestForWalletUser, int numPosts) {
             super();
             this.u = requestForWalletUser;
+            this.numPosts = numPosts;
         }
 
         @Override
@@ -396,15 +318,15 @@ public class Twister {
                             posts.putAll(user.getPosts());
                             directs.putAll(u.getDirectMessages(user.getId()));
 
-                            Twister.this.notifyPostsListListener();
-                            Twister.this.notifyFollowingUsersListListener();
+                            TwisterReading.this.notifyPostsListListener();
+                            TwisterReading.this.notifyFollowingUsersListListener();
                         }
 
                         // fetch posts
                         if (lastHave.getValue() > user.getLatestPostIdOnServer()) {
                             user.setLatestPostIdOnServer(lastHave.getValue());
 
-                            threads.execute(new GetPostsTask(DEFAULT_GET_POSTS, user));
+                            threads.execute(new GetPostsTask(numPosts, user));
                         }
 
                         // fetch direct messages
@@ -454,78 +376,6 @@ public class Twister {
         }
     }
 
-    abstract class GetWalletUsersTask implements Runnable {
- 
-        public GetWalletUsersTask() {
-            super();
-        }
-
-        public void run() {
-            try {
-                CloseableHttpClient http = newClient();
-                HttpPost request = newPost("listwalletusers",1,null);
-
-                GetWalletUsersHandler responseHandler = new GetWalletUsersHandler();
-
-                
-                List<String> result = http.execute(request, responseHandler);
-                if (result != null) {
-                    for (String id : result) {
-                        if (walletUsersList.get(id) == null) {
-                            walletUsersList.put(id, new WalletUser(id));
-                        }
-                    }
-                }
-                http.close();
-                
-                result(result);
-
-            } catch (ClientProtocolException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-        }
-        
-        abstract public void result(List<String> users);
-
-    }
-
-    private class GetWalletUsersHandler implements
-            ResponseHandler<List<String>> {
-
-        private static final String TAG = "GetWalletUsersHandler";
-
-        @Override
-        public List<String> handleResponse(HttpResponse response)
-                throws ClientProtocolException, IOException {
-            List<String> result = new ArrayList<String>();
-            String JSONResponse = new BasicResponseHandler()
-                    .handleResponse(response);
-            // Log.i(TAG, "response: " + JSONResponse);
-
-            try {
-                JSONObject responseObject = (JSONObject) new JSONTokener(
-                        JSONResponse).nextValue();
-
-                JSONArray walletUsersList = responseObject
-                        .getJSONArray("result");
-
-                for (int i = 0; i < walletUsersList.length(); i++) {
-                    result.add(walletUsersList.getString(i));
-                }
-
-            } catch (JSONException e) {
-                // e.printStackTrace();
-            }
-            
-
-            return result;
-        }
-    }
- 
     
     private class GetPostsTask implements Runnable {
 
@@ -571,7 +421,7 @@ public class Twister {
                     posts.putAll(result);
                     
                     System.out.println("posts: "+ posts);
-                    Twister.this.notifyPostsListListener();
+                    TwisterReading.this.notifyPostsListListener();
                 }
             } catch (ClientProtocolException e) {
                 e.printStackTrace();
@@ -693,7 +543,7 @@ public class Twister {
                 fromUser.getDirectMessages(toUser.getId()).putAll(result);
                 if (wallet.getId().equals(fromUser.getId())) {
                     directs.putAll(result);
-                    Twister.this.notifyDirectMessagesListListener();
+                    TwisterReading.this.notifyDirectMessagesListListener();
                 }
                 
                 
@@ -788,7 +638,7 @@ public class Twister {
 
                     spamPostsList.putAll(result);
                     posts.putAll(result);
-                    Twister.this.notifyPostsListListener();
+                    TwisterReading.this.notifyPostsListListener();
                 }
             } catch (ClientProtocolException e) {
                 e.printStackTrace();
@@ -928,222 +778,19 @@ public class Twister {
         }
     }
 
-    private class FollowTask extends AsyncTask<String, Void, Void> {
-
-        private static final String TAG = "FollowTask";
-
-        private AndroidHttpClient mClient = AndroidHttpClient.newInstance("");
-
-        public FollowTask() {
-            super();
-        }
-
-        @Override
-        protected Void doInBackground(String... params) {
-            try {
-                HttpPost request = new HttpPost(url);
-                JSONArray c = new JSONArray();
-                c.put(params[1]);
-
-                JSONArray b = new JSONArray();
-                b.put(params[0]);
-                b.put(c);
-
-                JSONObject a = new JSONObject();
-                a.put("method", "follow");
-                a.put("id", 1);
-                a.put("params", b);
-
-                request.setEntity(new StringEntity(a.toString(), "utf-8"));
-
-                request.setHeader(
-                        "Authorization",
-                        "Basic "
-                        + Base64.encodeToString("user:pwd".getBytes(),
-                                Base64.NO_WRAP));
-                FollowTaskHandler responseHandler = new FollowTaskHandler();
-
-                mClient.execute(request, responseHandler);
-                mClient.close();
-            } catch (ClientProtocolException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-            return null;
-        }
-
-        @Override
-        protected void onPostExecute(Void result) {
-        }
-    }
-
-    private class FollowTaskHandler implements ResponseHandler<Void> {
-
-        private static final String TAG = "FollowTaskHandler";
-
-        @Override
-        public Void handleResponse(HttpResponse response)
-                throws ClientProtocolException, IOException {
-            return null;
-        }
-    }
-
-    private class SendNewTwistTask extends AsyncTask<String, Void, Void> {
-
-        private static final String TAG = "SendNewTwistTask";
-
-        private AndroidHttpClient mClient = AndroidHttpClient.newInstance("");
-
-        public SendNewTwistTask() {
-            super();
-        }
-
-        @Override
-        protected Void doInBackground(String... params) {
-            try {
-                HttpPost request = new HttpPost(url);
-
-                JSONArray b = new JSONArray();
-                b.put(params[0]);
-                b.put(Integer.valueOf(params[1]));
-                b.put(params[2]);
-
-                JSONObject a = new JSONObject();
-                a.put("method", "newpostmsg");
-                a.put("id", 1);
-                a.put("params", b);
-
-                request.setEntity(new StringEntity(a.toString(), "utf-8"));
-
-                request.setHeader(
-                        "Authorization",
-                        "Basic "
-                        + Base64.encodeToString("user:pwd".getBytes(),
-                                Base64.NO_WRAP));
-                SendNewTwistTaskHandler responseHandler = new SendNewTwistTaskHandler();
-
-                mClient.execute(request, responseHandler);
-                mClient.close();
-            } catch (ClientProtocolException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-            return null;
-        }
-
-        @Override
-        protected void onPostExecute(Void result) {
-            (new GetLastHaveTask()).executeOnExecutor(threads,
-                    user());
-        }
-    }
-
-    private class SendNewTwistTaskHandler implements ResponseHandler<Void> {
-
-        private static final String TAG = "SendNewTwistTaskHandler";
-
-        @Override
-        public Void handleResponse(HttpResponse response)
-                throws ClientProtocolException, IOException {
-            return null;
-        }
-    }
-
-    private class SendNewDirectMessageTask extends
-            AsyncTask<String, Void, Void> {
-
-        private static final String TAG = "SendNewDirectMessageTask";
-
-        private AndroidHttpClient mClient = AndroidHttpClient.newInstance("");
-
-        public SendNewDirectMessageTask() {
-            super();
-        }
-
-        @Override
-        protected Void doInBackground(String... params) {
-            try {
-                HttpPost request = new HttpPost(url);
-
-                JSONArray b = new JSONArray();
-                b.put(params[0]);
-                b.put(Integer.valueOf(params[1]));
-                b.put(params[2]);
-                b.put(params[3]);
-
-                JSONObject a = new JSONObject();
-                a.put("method", "newdirectmsg");
-                a.put("id", 1);
-                a.put("params", b);
-
-                request.setEntity(new StringEntity(a.toString(), "utf-8"));
-
-                request.setHeader(
-                        "Authorization",
-                        "Basic "
-                        + Base64.encodeToString("user:pwd".getBytes(),
-                                Base64.NO_WRAP));
-                SendNewDirectMessageTaskHandler responseHandler = new SendNewDirectMessageTaskHandler();
-
-                mClient.execute(request, responseHandler);
-                mClient.close();
-            } catch (ClientProtocolException e) {
-                e.printStackTrace();
-            } catch (IOException e) {
-                e.printStackTrace();
-            } catch (JSONException e) {
-                e.printStackTrace();
-            }
-            return null;
-        }
-
-        @Override
-        protected void onPostExecute(Void result) {
-            (new GetLastHaveTask()).executeOnExecutor(threads,
-                    user());
-        }
-    }
-
-    private class SendNewDirectMessageTaskHandler implements
-            ResponseHandler<Void> {
-
-        private static final String TAG = "SendNewDirectMessageTaskHandler";
-
-        @Override
-        public Void handleResponse(HttpResponse response)
-                throws ClientProtocolException, IOException {
-            return null;
-        }
-    }
-
     public List<Map<String, String>> autocomplete(String input) {
 
         List<Map<String, String>> result = new ArrayList<Map<String, String>>();
 
         try {
-            HttpPost request = new HttpPost(url);
-            JSONArray b = new JSONArray();
-            b.put(input);
-            b.put(5);
+            int num = 5;
+            
+            CloseableHttpClient mClient = newClient();
+            
+            HttpPost request = newPost("listusernamespartial", 1, 
+                    new JSONArray().put(input).put(num)
+                    );
 
-            JSONObject a = new JSONObject();
-            a.put("method", "listusernamespartial");
-            a.put("id", 1);
-            a.put("params", b);
-
-            request.setEntity(new StringEntity(a.toString(), "utf-8"));
-
-            request.setHeader(
-                    "Authorization",
-                    "Basic "
-                    + Base64.encodeToString("user:pwd".getBytes(),
-                            Base64.NO_WRAP));
 
             List<String> userids = mClient.execute(request,
                     new ResponseHandler<List<String>>() {
